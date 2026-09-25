@@ -130,48 +130,75 @@ const WatchListItem = ({ stock }) => {
 };
 
 const WatchListActions = ({ uid }) => {
-  const generalContext = useContext(GeneralContext);
+    const generalContext = useContext(GeneralContext);
 
-  const handleBuyClick = () => {
-    generalContext.openBuyWindow(uid);
-  };
+    const handleBuyClick = () => {
+        generalContext.openBuyWindow(uid);
+    };
 
-  return (
-    <span className="actions">
-      <span>
-        <Tooltip
-          title="Buy (B)"
-          placement="top"
-          arrow
-          TransitionComponent={Grow}
-          onClick={handleBuyClick}
-        >
-          <button className="buy">Buy</button>
-        </Tooltip>
-        <Tooltip
-          title="Sell (S)"
-          placement="top"
-          arrow
-          TransitionComponent={Grow}
-        >
-          <button className="sell">Sell</button>
-        </Tooltip>
-        <Tooltip
-          title="Analytics (A)"
-          placement="top"
-          arrow
-          TransitionComponent={Grow}
-        >
-          <button className="action">
-            <BarChartOutlined className="icon" />
-          </button>
-        </Tooltip>
-        <Tooltip title="More" placement="top" arrow TransitionComponent={Grow}>
-          <button className="action">
-            <MoreHoriz className="icon" />
-          </button>
-        </Tooltip>
-      </span>
-    </span>
-  );
+    const handleSellClick = () => {
+        generalContext.openSellWindow(uid);
+    };
+
+    return (
+        <span className="actions">
+            <span>
+
+                {/* BUY */}
+                <Tooltip
+                    title="Buy (B)"
+                    placement="top"
+                    arrow
+                    TransitionComponent={Grow}
+                >
+                    <button
+                        className="buy"
+                        onClick={handleBuyClick}
+                    >
+                        Buy
+                    </button>
+                </Tooltip>
+
+                {/* SELL */}
+                <Tooltip
+                    title="Sell (S)"
+                    placement="top"
+                    arrow
+                    TransitionComponent={Grow}
+                >
+                    <button
+                        className="sell"
+                        onClick={handleSellClick}
+                    >
+                        Sell
+                    </button>
+                </Tooltip>
+
+                {/* ANALYTICS */}
+                <Tooltip
+                    title="Analytics (A)"
+                    placement="top"
+                    arrow
+                    TransitionComponent={Grow}
+                >
+                    <button className="action">
+                        <BarChartOutlined className="icon" />
+                    </button>
+                </Tooltip>
+
+                {/* MORE */}
+                <Tooltip
+                    title="More"
+                    placement="top"
+                    arrow
+                    TransitionComponent={Grow}
+                >
+                    <button className="action">
+                        <MoreHoriz className="icon" />
+                    </button>
+                </Tooltip>
+
+            </span>
+        </span>
+    );
 };

@@ -7,17 +7,32 @@ const express = require("express");
 const mongoose=require("mongoose");
 const bodyParser = require("body-parser");
 const cors = require ("cors");
+
 const {HoldingsModel} = require("./model/HoldingsModel");
 const {PositionsModel} = require("./model/PositionsModel");
 const { OrdersModel } = require("./model/OrdersModel");
+const {FundsModel} = require("./model/FundsModel");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
+const {UserModel} = require("./model/UserModel");
 
 const PORT=process.env.PORT||3002;
 const uri=process.env.MONGO_URL;
 
 const app = express();
 
-app.use(cors());
+app.use(
+  cors({
+  origin:[
+    "http://localhost:3000",
+    "http://localhost:3001",
+  ],
+  credentials:true,
+})
+);
 app.use(bodyParser.json());
+app.use(cookieParser());
 
 // app.get('/addHoldings',async(requestAnimationFrame,res)=>{
 //     let tempHoldings=[
@@ -184,28 +199,546 @@ app.use(bodyParser.json());
 //   });
 //   res.send("Done!");
 // });
+app.post("/auth/signup", async (req, res) => {
+  try {
+    const { name, email, phone, password } = req.body;
 
-app.get("/allHoldings",async(req,res)=>{
-  let allHoldings = await HoldingsModel.find({});
-  res.json(allHoldings);
+    // Check all fields
+    if (!name || !email || !phone || !password) {
+      return res.status(400).json({
+        message: "All fields are required",
+      });
+    }
+
+    // Check password length
+    if (password.length < 6) {
+      return res.status(400).json({
+        message: "Password must be at least 6 characters",
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await UserModel.findOne({
+      email: email.toLowerCase(),
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "User already exists",
+      });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user
+    const newUser = await UserModel.create({
+      name,
+      email: email.toLowerCase(),
+      phone,
+      password: hashedPassword,
+    });
+
+    // Create JWT
+    const token = jwt.sign(
+      {
+        userId: newUser._id,
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "7d",
+      }
+    );
+
+    // Store JWT in HTTP-only cookie
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: false,
+      sameSite: "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.status(201).json({
+      message: "Account created successfully",
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        phone: newUser.phone,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: "Server error",
+    });
+  }
 });
+app.post("/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
 
-app.get("/allPositions",async(req,res)=>{
-  let allPositions = await PositionsModel.find({});
-  res.json(allPositions);
+    if (!email || !password) {
+      return res.status(400).json({
+        message: "Email and password are required",
+      });
+    }
+
+    const user = await UserModel.findOne({
+      email: email.toLowerCase(),
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(
+      password,
+      user.password
+    );
+
+    if (!isPasswordCorrect) {
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        userId: user._id,
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "7d",
+      }
+    );
+
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: false,
+      sameSite: "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.json({
+      message: "Login successful",
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: "Server error",
+    });
+  }
 });
+const authenticateUser = async (req, res, next) => {
+  try {
+    const token = req.cookies.token;
 
-app.post("/newOrder",async(req,res)=>{
-  let newOrder = new OrdersModel({
-    name: req.body.name,
-    qty: req.body.qty,
-    price: req.body.price,
-    mode: req.body.mode,
+    if (!token) {
+      return res.status(401).json({
+        message: "Not authenticated",
+      });
+    }
+
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
+
+    const user = await UserModel.findById(decoded.userId).select(
+      "-password"
+    );
+
+    if (!user) {
+      return res.status(401).json({
+        message: "User not found",
+      });
+    }
+
+    req.user = user;
+
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      message: "Invalid or expired session",
+    });
+  }
+};
+app.get("/auth/me", authenticateUser, (req, res) => {
+  res.json({
+    user: req.user,
   });
-  newOrder.save();
-  res.send("Order saved");
+});
+app.post("/auth/logout", (req, res) => {
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: false,
+    sameSite: "lax",
+  });
+
+  res.json({
+    message: "Logged out successfully",
+  });
+});
+app.get("/allHoldings", authenticateUser, async (req, res) => {
+    let allHoldings = await HoldingsModel.find({
+        userId: req.user._id
+    });
+
+    res.json(allHoldings);
 });
 
+app.get("/allPositions", authenticateUser, async (req, res) => {
+    console.log("Logged in user ID:", req.user._id);
+
+    let allPositions = await PositionsModel.find({
+      userId: req.user._id
+    });
+
+    console.log("ALL POSITIONS IN DATABASE:", allPositions);
+
+    res.json(allPositions);
+});
+app.get("/funds", authenticateUser, async (req, res) => {
+    try {
+        let funds = await FundsModel.findOne({
+            userId: req.user._id
+        });
+
+        // Create default funds for a new user
+        if (!funds) {
+            funds = new FundsModel({
+                userId: req.user._id,
+                availableCash: 0,
+                openingBalance: 0,
+                payin: 0,
+                payout: 0
+            });
+
+            await funds.save();
+        }
+
+        // Find user's current holdings
+        const holdings = await HoldingsModel.find({
+            userId: req.user._id
+        });
+
+        // Calculate money currently invested in holdings
+        const usedMargin = holdings.reduce((total, holding) => {
+            const qty = Number(holding.qty) || 0;
+            const avg = Number(holding.avg) || 0;
+
+            return total + (qty * avg);
+        }, 0);
+
+        res.json({
+            ...funds.toObject(),
+            usedMargin: usedMargin
+        });
+
+    } catch (error) {
+        console.error("FUNDS ERROR:", error);
+
+        res.status(500).json({
+            error: "Failed to fetch funds"
+        });
+    }
+});
+app.post("/addFunds", authenticateUser, async (req, res) => {
+    try {
+        const amount = Number(req.body.amount);
+
+        if (!amount || amount <= 0) {
+            return res.status(400).send("Enter a valid amount");
+        }
+
+        let funds = await FundsModel.findOne({
+            userId: req.user._id
+        });
+
+        if (!funds) {
+            funds = new FundsModel({
+                userId: req.user._id,
+                availableCash: amount,
+                openingBalance: 0,
+                payin: amount,
+                payout: 0
+            });
+        } else {
+            funds.availableCash += amount;
+            funds.payin += amount;
+        }
+
+        await funds.save();
+
+        console.log("FUNDS ADDED:", amount);
+
+        res.json({
+            message: "Funds added successfully",
+            funds: funds
+        });
+
+    } catch (error) {
+        console.error("ADD FUNDS ERROR:", error);
+        res.status(500).send("Failed to add funds");
+    }
+});
+app.post("/withdrawFunds", authenticateUser, async (req, res) => {
+    try {
+        const amount = Number(req.body.amount);
+
+        if (!amount || amount <= 0) {
+            return res.status(400).send("Enter a valid amount");
+        }
+
+        let funds = await FundsModel.findOne({
+            userId: req.user._id
+        });
+
+        if (!funds) {
+            return res.status(404).send("Funds account not found");
+        }
+
+        if (amount > funds.availableCash) {
+            return res.status(400).send("Insufficient available cash");
+        }
+
+        funds.availableCash -= amount;
+        funds.payout += amount;
+
+        await funds.save();
+
+        console.log("FUNDS WITHDRAWN:", amount);
+
+        res.json({
+            message: "Funds withdrawn successfully",
+            funds: funds
+        });
+
+    } catch (error) {
+        console.error("WITHDRAW FUNDS ERROR:", error);
+        res.status(500).send("Failed to withdraw funds");
+    }
+});
+app.get("/allOrders", authenticateUser, async (req, res) => {
+    let allOrders = await OrdersModel.find({
+        userId: req.user._id
+    });
+
+    res.json(allOrders);
+});
+app.post("/newOrder", authenticateUser, async (req, res) => {
+    try {
+       const { name, qty, price, mode } = req.body;
+
+const quantity = Number(qty);
+const stockPrice = Number(price);
+
+// Check and deduct funds for BUY
+if (mode === "BUY") {
+    const totalAmount = quantity * stockPrice;
+
+    let funds = await FundsModel.findOne({
+        userId: req.user._id
+    });
+
+    if (!funds) {
+        return res.status(400).send("Funds account not found");
+    }
+
+    if (funds.availableCash < totalAmount) {
+        return res.status(400).send("Insufficient funds");
+    }
+
+    funds.availableCash -= totalAmount;
+    await funds.save();
+
+    console.log("FUNDS DEDUCTED:", totalAmount);
+}
+
+console.log("========== NEW ORDER ==========");
+        console.log("USER:", req.user._id);
+        console.log("BODY:", req.body);
+
+        // 1. Save order
+        const newOrder = new OrdersModel({
+            userId: req.user._id,
+            name: name,
+            qty: quantity,
+            price: stockPrice,
+            mode: mode,
+        });
+
+        await newOrder.save();
+
+        // 2. Find user's existing holding
+        let holding = await HoldingsModel.findOne({
+            userId: req.user._id,
+            name: name,
+        });
+
+        if (mode === "BUY") {
+
+            // If holding already exists
+            if (holding) {
+                const oldQty = holding.qty || 0;
+                const oldAvg = holding.avg || 0;
+
+                const newQty = oldQty + quantity;
+
+                // Calculate new average price
+                const newAvg =
+                    ((oldQty * oldAvg) + (quantity * stockPrice)) / newQty;
+
+                holding.qty = newQty;
+                holding.avg = newAvg;
+                holding.price = stockPrice;
+
+                await holding.save();
+
+            } else {
+
+                // Create new holding
+                holding = new HoldingsModel({
+                    userId: req.user._id,
+                    name: name,
+                    qty: quantity,
+                    avg: stockPrice,
+                    price: stockPrice,
+                    net: "0",
+                    day: "0",
+                });
+
+                await holding.save();
+            }
+
+            console.log("HOLDING UPDATED:", holding);
+        }
+
+        // 3. SELL
+       // 3. SELL
+if (mode === "SELL") {
+
+    if (!holding) {
+        return res.status(400).send("You don't own this stock");
+    }
+
+    if (holding.qty < quantity) {
+        return res.status(400).send("Not enough quantity to sell");
+    }
+
+    holding.qty = holding.qty - quantity;
+    holding.price = stockPrice;
+
+    // If all shares are sold, remove holding
+    if (holding.qty === 0) {
+        await HoldingsModel.deleteOne({
+            _id: holding._id,
+        });
+
+        console.log("HOLDING CLOSED:", name);
+    } else {
+        await holding.save();
+
+        console.log("HOLDING REDUCED:", holding);
+    }
+
+    // Add SELL amount back to available funds
+    const totalAmount = quantity * stockPrice;
+
+    let funds = await FundsModel.findOne({
+        userId: req.user._id
+    });
+
+    if (funds) {
+        funds.availableCash += totalAmount;
+        await funds.save();
+
+        console.log("FUNDS ADDED FROM SELL:", totalAmount);
+    }
+}
+
+        // 4. Update Positions
+        let position = await PositionsModel.findOne({
+            userId: req.user._id,
+            name: name,
+        });
+
+        if (mode === "BUY") {
+
+            if (position) {
+                const oldQty = position.qty || 0;
+                const oldAvg = position.avg || 0;
+
+                const newQty = oldQty + quantity;
+
+                const newAvg =
+                    ((oldQty * oldAvg) + (quantity * stockPrice)) / newQty;
+
+                position.qty = newQty;
+                position.avg = newAvg;
+                position.price = stockPrice;
+
+                await position.save();
+
+            } else {
+
+                position = new PositionsModel({
+                    userId: req.user._id,
+                    product: "CNC",
+                    name: name,
+                    qty: quantity,
+                    avg: stockPrice,
+                    price: stockPrice,
+                    net: "0",
+                    day: "0",
+                    isLoss: false,
+                });
+
+                await position.save();
+            }
+
+            console.log("POSITION UPDATED:", position);
+        }
+
+        if (mode === "SELL") {
+
+            if (position) {
+                position.qty = position.qty - quantity;
+                position.price = stockPrice;
+
+                if (position.qty <= 0) {
+                    await PositionsModel.deleteOne({
+                        _id: position._id,
+                    });
+
+                    console.log("POSITION CLOSED:", name);
+                } else {
+                    await position.save();
+
+                    console.log("POSITION REDUCED:", position);
+                }
+            }
+        }
+
+        console.log("ORDER SAVED SUCCESSFULLY");
+
+        res.send("Order saved");
+    } catch (error) {
+        console.error("ORDER ERROR:", error);
+        res.status(500).send("Failed to save order");
+    }
+});
 app.listen(PORT, async () => {
     console.log("App Started!");
     try {
